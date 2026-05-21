@@ -2,12 +2,13 @@ import Cocoa
 import SwiftUI
 import AVFoundation
 
-class AppDelegate: NSObject, NSApplicationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
     var statusItem: NSStatusItem?
     var settingsWindow: NSWindow?
     
     let downloader = ModelDownloader()
     var audioRecorder: AVAudioRecorder?
+    var audioPlayer: AVAudioPlayer?
     var wasFnPressed = false
     var isRecording = false
     var isProcessing = false
@@ -60,13 +61,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     @objc func showSettings() {
         if settingsWindow == nil {
-            let view = SettingsView(downloader: self.downloader)
+            let view = SettingsView(
+                downloader: self.downloader,
+                audioInputState: self.audioInputState,
+                onPlayPause: { [weak self] in
+                    self?.playLastAudio()
+                }
+            )
             let hostingController = NSHostingController(rootView: view)
             
             let window = NSWindow(contentViewController: hostingController)
             window.title = "Izi Input Settings"
             window.styleMask = [.titled, .closable, .miniaturizable]
-            window.setContentSize(NSSize(width: 480, height: 580))
+            window.setContentSize(NSSize(width: 480, height: 680))
             window.center()
             window.isReleasedWhenClosed = false
             
@@ -230,43 +237,72 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: whisperExecutablePath)
+        var russianText = ""
+        var englishText = ""
         
-        // -m <model> -f <audio> -tr (translate) --no-timestamps
-        process.arguments = [
-            "-m", modelPath,
-            "-f", audioPath,
-            "-tr",
-            "--no-timestamps"
-        ]
-        
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = Pipe() // Silences the whisper diagnostic logging
-        
+        // 1. Run Russian transcription
         do {
-            try process.run()
-            process.waitUntilExit()
+            let ruProcess = Process()
+            ruProcess.executableURL = URL(fileURLWithPath: whisperExecutablePath)
+            ruProcess.arguments = [
+                "-m", modelPath,
+                "-f", audioPath,
+                "-l", "ru",
+                "--no-timestamps"
+            ]
+            let ruPipe = Pipe()
+            ruProcess.standardOutput = ruPipe
+            ruProcess.standardError = Pipe()
             
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            try ruProcess.run()
+            ruProcess.waitUntilExit()
+            
+            let data = ruPipe.fileHandleForReading.readDataToEndOfFile()
             if let output = String(data: data, encoding: .utf8) {
-                let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
-                print("[Izi Input] Output: \(trimmed)")
-                
-                if !trimmed.isEmpty {
-                    DispatchQueue.main.async {
-                        self.pasteText(trimmed)
-                    }
-                }
+                russianText = output.trimmingCharacters(in: .whitespacesAndNewlines)
             }
+            print("[Izi Input] Russian transcription output: \(russianText)")
         } catch {
-            print("[Izi Input] Error running Whisper: \(error.localizedDescription)")
+            print("[Izi Input] Error running Whisper Russian transcription: \(error.localizedDescription)")
+        }
+        
+        // 2. Run English translation
+        do {
+            let enProcess = Process()
+            enProcess.executableURL = URL(fileURLWithPath: whisperExecutablePath)
+            enProcess.arguments = [
+                "-m", modelPath,
+                "-f", audioPath,
+                "-tr",
+                "--no-timestamps"
+            ]
+            let enPipe = Pipe()
+            enProcess.standardOutput = enPipe
+            enProcess.standardError = Pipe()
+            
+            try enProcess.run()
+            enProcess.waitUntilExit()
+            
+            let data = enPipe.fileHandleForReading.readDataToEndOfFile()
+            if let output = String(data: data, encoding: .utf8) {
+                englishText = output.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            print("[Izi Input] English translation output: \(englishText)")
+        } catch {
+            print("[Izi Input] Error running Whisper English translation: \(error.localizedDescription)")
         }
         
         DispatchQueue.main.async {
             self.isProcessing = false
             self.updateStatusIcon()
+            
+            self.audioInputState.lastRussianText = russianText
+            self.audioInputState.lastEnglishText = englishText
+            self.audioInputState.hasLastAudio = FileManager.default.fileExists(atPath: self.tempAudioURL.path)
+            
+            if !englishText.isEmpty {
+                self.pasteText(englishText)
+            }
         }
     }
     
@@ -333,6 +369,42 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         notification.informativeText = text
         notification.soundName = NSUserNotificationDefaultSoundName
         NSUserNotificationCenter.default.deliver(notification)
+    }
+    
+    // MARK: - Audio Playback
+    
+    func playLastAudio() {
+        guard FileManager.default.fileExists(atPath: tempAudioURL.path) else {
+            print("[Izi Input] Last audio file not found at \(tempAudioURL.path)")
+            return
+        }
+        
+        if audioInputState.isPlayingAudio {
+            audioPlayer?.stop()
+            audioInputState.isPlayingAudio = false
+            print("[Izi Input] Playback stopped.")
+            return
+        }
+        
+        do {
+            audioPlayer = try AVAudioPlayer(contentsOf: tempAudioURL)
+            audioPlayer?.delegate = self
+            audioPlayer?.prepareToPlay()
+            audioPlayer?.play()
+            audioInputState.isPlayingAudio = true
+            print("[Izi Input] Playing last audio file...")
+        } catch {
+            print("[Izi Input] Failed to play last audio: \(error.localizedDescription)")
+        }
+    }
+    
+    // MARK: - AVAudioPlayerDelegate
+    
+    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        DispatchQueue.main.async {
+            self.audioInputState.isPlayingAudio = false
+            print("[Izi Input] Playback finished.")
+        }
     }
 }
 

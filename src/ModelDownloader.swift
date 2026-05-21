@@ -4,6 +4,8 @@ enum WhisperModel: String, CaseIterable, Identifiable {
     case tiny = "Tiny (~75 MB)"
     case base = "Base (~148 MB)"
     case small = "Small (~466 MB)"
+    case medium = "Medium (~1.5 GB)"
+    case largeTurbo = "Large-Turbo (~3.1 GB)"
     
     var id: String { self.rawValue }
     
@@ -12,6 +14,8 @@ enum WhisperModel: String, CaseIterable, Identifiable {
         case .tiny: return "ggml-tiny.bin"
         case .base: return "ggml-base.bin"
         case .small: return "ggml-small.bin"
+        case .medium: return "ggml-medium.bin"
+        case .largeTurbo: return "ggml-large-v3-turbo.bin"
         }
     }
     

@@ -3,6 +3,9 @@ import AppKit
 
 struct SettingsView: View {
     @ObservedObject var downloader: ModelDownloader
+    @ObservedObject var audioInputState: AudioInputState
+    let onPlayPause: () -> Void
+    
     @State private var hasAccessibilityAccess: Bool = false
     
     // Timer to poll for Accessibility permissions while window is active
@@ -118,6 +121,107 @@ struct SettingsView: View {
             }
             .padding(.horizontal)
             
+            // Section 1.5: Last Recording
+            if audioInputState.hasLastAudio {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Image(systemName: "waveform")
+                            .font(.title3)
+                            .foregroundColor(.pink)
+                        Text("Последняя запись")
+                            .font(.headline)
+                        
+                        Spacer()
+                        
+                        // Play/Pause Button
+                        Button(action: onPlayPause) {
+                            HStack(spacing: 6) {
+                                Image(systemName: audioInputState.isPlayingAudio ? "pause.fill" : "play.fill")
+                                Text(audioInputState.isPlayingAudio ? "Пауза" : "Прослушать")
+                            }
+                            .font(.caption)
+                            .fontWeight(.medium)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 4)
+                            .background(audioInputState.isPlayingAudio ? Color.red.opacity(0.15) : Color.green.opacity(0.15))
+                            .foregroundColor(audioInputState.isPlayingAudio ? .red : .green)
+                            .cornerRadius(6)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    
+                    VStack(alignment: .leading, spacing: 10) {
+                        // Russian Text Box
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text("Русский (оригинал):")
+                                    .font(.caption)
+                                    .fontWeight(.semibold)
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                                Button(action: {
+                                    copyToClipboard(audioInputState.lastRussianText)
+                                }) {
+                                    Label("Копировать", systemImage: "doc.on.doc")
+                                        .font(.caption2)
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            }
+                            
+                            ScrollView {
+                                Text(audioInputState.lastRussianText.isEmpty ? "Речь не распознана" : audioInputState.lastRussianText)
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundColor(.primary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(6)
+                            }
+                            .frame(height: 40)
+                            .background(Color(NSColor.controlBackgroundColor).opacity(0.4))
+                            .cornerRadius(6)
+                        }
+                        
+                        // English Text Box
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text("English (перевод):")
+                                    .font(.caption)
+                                    .fontWeight(.semibold)
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                                Button(action: {
+                                    copyToClipboard(audioInputState.lastEnglishText)
+                                }) {
+                                    Label("Копировать", systemImage: "doc.on.doc")
+                                        .font(.caption2)
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            }
+                            
+                            ScrollView {
+                                Text(audioInputState.lastEnglishText.isEmpty ? "Translation not available" : audioInputState.lastEnglishText)
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundColor(.primary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(6)
+                            }
+                            .frame(height: 40)
+                            .background(Color(NSColor.controlBackgroundColor).opacity(0.4))
+                            .cornerRadius(6)
+                        }
+                    }
+                    .padding()
+                    .background(Color(NSColor.windowBackgroundColor).opacity(0.5))
+                    .cornerRadius(12)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(Color.secondary.opacity(0.1), lineWidth: 1)
+                    )
+                }
+                .padding(.horizontal)
+            }
+            
             // Section 2: Accessibility Access
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
@@ -196,7 +300,7 @@ struct SettingsView: View {
             .padding(.bottom, 10)
         }
         .padding()
-        .frame(width: 480, height: 580)
+        .frame(width: 480, height: 680)
         .onAppear {
             checkAccessibilityAccess()
         }
@@ -218,5 +322,11 @@ struct SettingsView: View {
         if let url = URL(string: urlString) {
             NSWorkspace.shared.open(url)
         }
+    }
+    
+    func copyToClipboard(_ text: String) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
     }
 }
