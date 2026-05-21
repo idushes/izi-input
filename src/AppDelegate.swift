@@ -369,7 +369,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
     
     func pasteText(_ text: String) {
         let pasteboard = NSPasteboard.general
-        let priorContent = pasteboard.string(forType: .string)
         
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
@@ -391,18 +390,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
         vUp?.post(tap: loc)
         cmdUp?.post(tap: loc)
         print("[Izi Input] Simulated Cmd+V keystroke sent.")
-        
-        // Restore prior clipboard content after a safe 0.5s delay to avoid race conditions
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            if let prior = priorContent {
-                let currentCB = NSPasteboard.general.string(forType: .string)
-                if currentCB == text {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(prior, forType: .string)
-                    print("[Izi Input] Clipboard restored successfully.")
-                }
-            }
-        }
     }
     
     // MARK: - UI Helpers
