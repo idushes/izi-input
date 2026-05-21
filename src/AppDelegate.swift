@@ -27,6 +27,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusItem()
         requestMicrophonePermission()
+        checkAccessibilityPermission() // Prompts macOS to request Accessibility if missing or invalid
         setupGlobalKeyListener()
         
         // Initialize voice overlay window
@@ -97,6 +98,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
                 print("[Izi Input] Microphone access denied.")
             }
         }
+    }
+    
+    func checkAccessibilityPermission() {
+        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+        let accessEnabled = AXIsProcessTrustedWithOptions(options)
+        print("[Izi Input] Accessibility permission trusted status: \(accessEnabled)")
     }
     
     func setupGlobalKeyListener() {
