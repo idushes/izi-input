@@ -21,7 +21,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
     private let minimumRecordingDuration: TimeInterval = 0.35
     private let silencePeakThresholdDBFS = -50.0
     private let silenceRMSThresholdDBFS = -55.0
-    private let bluetoothInputWarmupDuration: TimeInterval = 2.0
 
     // Temporary audio file path
     var tempAudioURL: URL {
@@ -170,7 +169,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
             audioRecorder = recorder
             isRecording = true
             audioInputState.isRecording = true
-            audioInputState.isAudioReady = false
+            audioInputState.isAudioReady = true
             updateStatusIcon()
 
             overlayWindow?.alphaValue = 0
@@ -192,24 +191,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
 
             let startupMilliseconds = Int(Date().timeIntervalSince(recordingRequestedAt) * 1000)
             print("[Izi Input] Recording started successfully. Startup latency: \(startupMilliseconds) ms.")
-
-            let warmupDuration = warmupDurationForInput(named: inputDeviceName)
-            if warmupDuration > 0 {
-                let warmupMilliseconds = Int(warmupDuration * 1000)
-                print("[Izi Input] Warming up audio input for \(warmupMilliseconds) ms.")
-                DispatchQueue.main.asyncAfter(deadline: .now() + warmupDuration) { [weak self, weak recorder] in
-                    guard let self = self,
-                          self.isRecording,
-                          let recorder = recorder,
-                          self.audioRecorder === recorder else {
-                        return
-                    }
-                    self.audioInputState.isAudioReady = true
-                    print("[Izi Input] Audio input is ready after warm-up.")
-                }
-            } else {
-                audioInputState.isAudioReady = true
-            }
         } catch {
             print("[Izi Input] Failed to start recording: \(error.localizedDescription)")
             isRecording = false
@@ -223,15 +204,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
         }
     }
 
-    func warmupDurationForInput(named inputDeviceName: String) -> TimeInterval {
-        let lowercasedName = inputDeviceName.lowercased()
-        if lowercasedName.contains("airpods") || lowercasedName.contains("bluetooth") {
-            return bluetoothInputWarmupDuration
-        }
-
-        return 0
-    }
-
     func stopRecording() {
         guard isRecording else { return }
 
@@ -239,7 +211,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
         meteringTimer?.invalidate()
         meteringTimer = nil
         audioInputState.isRecording = false
-        let wasAudioReady = audioInputState.isAudioReady
         audioInputState.isAudioReady = false // Reset to false
         audioInputState.amplitude = 0.0
 
@@ -258,14 +229,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
 
         // Only run transcription if we actually recorded something (audioRecorder was initialized)
         if hasRecorder {
-            guard wasAudioReady else {
-                finishRecordingWithoutTranscription(
-                    title: "Microphone Warming Up",
-                    text: "Wait for the red indicator before speaking."
-                )
-                return
-            }
-
             guard validateLastRecordingForTranscription() else { return }
 
             isProcessing = true
