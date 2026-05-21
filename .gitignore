@@ -1,0 +1,17 @@
+# macOS system files
+.DS_Store
+
+# Logs
+*.log
+app.log
+debug.log
+
+# Build & compilation artifacts
+IziInput.app/
+IziInput
+build/
+bin/
+obj/
+
+# Submodules / Externals
+whisper.cpp/
