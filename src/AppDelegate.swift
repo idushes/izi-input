@@ -142,6 +142,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
 
         let recordingRequestedAt = Date()
 
+        isRecording = true
+        audioInputState.isRecording = true
+        audioInputState.isAudioReady = false
+        audioInputState.amplitude = 0.0
+        updateStatusIcon()
+        showRecordingOverlay()
+
         print("[Izi Input] Initializing audio recording...")
         let inputDeviceName = AVCaptureDevice.default(for: .audio)?.localizedName ?? "Unknown"
         print("[Izi Input] Default audio input device: \(inputDeviceName)")
@@ -169,11 +176,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
             }
 
             audioRecorder = recorder
-            isRecording = true
-            audioInputState.isRecording = true
-            audioInputState.isAudioReady = false
-            updateStatusIcon()
-            showRecordingOverlay()
 
             meteringTimer?.invalidate()
             meteringTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
@@ -224,13 +226,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
     }
 
     func showRecordingOverlay() {
-        overlayWindow?.alphaValue = 0
         overlayWindow?.updatePosition()
+        overlayWindow?.alphaValue = 1.0
         overlayWindow?.orderFrontRegardless()
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.15
-            overlayWindow?.animator().alphaValue = 1.0
-        }
+        overlayWindow?.contentView?.layoutSubtreeIfNeeded()
+        overlayWindow?.contentView?.displayIfNeeded()
     }
 
     func stopRecording() {
