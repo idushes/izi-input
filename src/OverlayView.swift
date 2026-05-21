@@ -41,11 +41,13 @@ struct WaveBar: View {
     let amplitude: CGFloat
     let index: Int
     let phase: Double
-    
+    let isAudioReady: Bool
+
     var body: some View {
         let baseHeight = CGFloat(6.0) // slightly reduced baseline for compactness
         let multiplier = CGFloat(1.0 - Double(abs(3 - index)) * 0.15)
-        
+        let colors: [Color] = isAudioReady ? [.blue, .purple] : [.orange, .yellow]
+
         // Beautiful breathing sine wave for idle state
         let idleHeight = baseHeight + CGFloat(sin(phase + Double(index) * 0.8) * 2.5)
         
@@ -59,13 +61,14 @@ struct WaveBar: View {
         RoundedRectangle(cornerRadius: 1.5)
             .fill(
                 LinearGradient(
-                    colors: [.blue, .purple],
+                    colors: colors,
                     startPoint: .bottom,
                     endPoint: .top
                 )
             )
             .frame(width: 3.0, height: height) // slightly narrower bars
             .animation(.interactiveSpring(response: 0.15, dampingFraction: 0.6), value: amplitude)
+            .animation(.easeInOut(duration: 0.25), value: isAudioReady)
     }
 }
 
@@ -79,15 +82,14 @@ struct OverlayView: View {
             Circle()
                 .fill(audioInputState.isAudioReady ? Color.red : Color.orange)
                 .frame(width: 6, height: 6)
-                .scaleEffect(audioInputState.isAudioReady && isPulsing ? 1.25 : 0.75)
-                .opacity(audioInputState.isAudioReady && isPulsing ? 1.0 : 0.5)
+                .scaleEffect(isPulsing ? (audioInputState.isAudioReady ? 1.25 : 1.08) : 0.75)
+                .opacity(isPulsing ? (audioInputState.isAudioReady ? 1.0 : 0.75) : 0.5)
                 .animation(
-                    audioInputState.isAudioReady 
-                        ? .easeInOut(duration: 0.6).repeatForever(autoreverses: true)
-                        : .default,
+                    .easeInOut(duration: audioInputState.isAudioReady ? 0.6 : 0.8).repeatForever(autoreverses: true),
                     value: isPulsing
                 )
-            
+                .animation(.easeInOut(duration: 0.25), value: audioInputState.isAudioReady)
+
             // Voice reactive wave bar visualization using TimelineView for continuous, 60fps animations
             TimelineView(.animation) { timelineContext in
                 let time = timelineContext.date.timeIntervalSinceReferenceDate
@@ -96,7 +98,8 @@ struct OverlayView: View {
                         WaveBar(
                             amplitude: audioInputState.isAudioReady ? audioInputState.amplitude : 0.0, 
                             index: i, 
-                            phase: time * 4.0 // 4.0 speed multiplier for perfect breathing wave rate
+                            phase: time * 4.0, // 4.0 speed multiplier for perfect breathing wave rate
+                            isAudioReady: audioInputState.isAudioReady
                         )
                     }
                 }
@@ -108,19 +111,27 @@ struct OverlayView: View {
         .background(
             Capsule()
                 .fill(Color.black.opacity(0.8))
-                .shadow(color: Color.purple.opacity(0.25), radius: 8, x: 0, y: 3)
+                .shadow(
+                    color: (audioInputState.isAudioReady ? Color.purple : Color.orange).opacity(0.25),
+                    radius: 8,
+                    x: 0,
+                    y: 3
+                )
         )
         .overlay(
             Capsule()
                 .stroke(
                     LinearGradient(
-                        colors: [.blue.opacity(0.4), .purple.opacity(0.4)],
+                        colors: audioInputState.isAudioReady
+                            ? [.blue.opacity(0.4), .purple.opacity(0.4)]
+                            : [.orange.opacity(0.45), .yellow.opacity(0.35)],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     ),
                     lineWidth: 1
                 )
         )
+        .animation(.easeInOut(duration: 0.25), value: audioInputState.isAudioReady)
         .frame(width: 90, height: 50)
         .padding(10) // Padding to prevent clipping the shadow
         .onAppear {

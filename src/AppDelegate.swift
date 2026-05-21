@@ -173,6 +173,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
             audioInputState.isRecording = true
             audioInputState.isAudioReady = false
             updateStatusIcon()
+            showRecordingOverlay()
 
             meteringTimer?.invalidate()
             meteringTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
@@ -198,8 +199,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
                 }
 
                 self.audioInputState.isAudioReady = true
-                self.showRecordingOverlay()
-                print("[Izi Input] Recording indicator shown after pre-roll.")
+                print("[Izi Input] Recording indicator switched to ready after pre-roll.")
             }
         } catch {
             print("[Izi Input] Failed to start recording: \(error.localizedDescription)")
