@@ -163,7 +163,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
                 AVNumberOfChannelsKey: 1,
                 AVLinearPCMBitDepthKey: 16,
                 AVLinearPCMIsBigEndianKey: false,
-                AVLinearPCMIsFloatKey: false
+                AVLinearPCMIsFloatKey: false,
+                AVSampleRateConverterAudioQualityKey: AVAudioQuality.max.rawValue,
+                AVEncoderAudioQualityKey: AVAudioQuality.max.rawValue
             ]
             
             do {
