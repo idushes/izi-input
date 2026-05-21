@@ -21,16 +21,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
     private let minimumRecordingDuration: TimeInterval = 0.35
     private let silencePeakThresholdDBFS = -50.0
     private let silenceRMSThresholdDBFS = -55.0
-    private let whisperLeadingSilenceDuration: TimeInterval = 0.25
-    private let whisperTrimSilenceThresholdDBFS = -50.0
+    private let bluetoothInputWarmupDuration: TimeInterval = 2.0
 
     // Temporary audio file path
     var tempAudioURL: URL {
         return FileManager.default.temporaryDirectory.appendingPathComponent("izi_input_temp.wav")
-    }
-
-    var tempWhisperAudioURL: URL {
-        return FileManager.default.temporaryDirectory.appendingPathComponent("izi_input_whisper.wav")
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -147,9 +142,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
         let recordingRequestedAt = Date()
 
         print("[Izi Input] Initializing audio recording...")
-        if let inputDevice = AVCaptureDevice.default(for: .audio) {
-            print("[Izi Input] Default audio input device: \(inputDevice.localizedName)")
-        }
+        let inputDeviceName = AVCaptureDevice.default(for: .audio)?.localizedName ?? "Unknown"
+        print("[Izi Input] Default audio input device: \(inputDeviceName)")
 
         let settings: [String: Any] = [
             AVFormatIDKey: Int(kAudioFormatLinearPCM),
@@ -176,7 +170,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
             audioRecorder = recorder
             isRecording = true
             audioInputState.isRecording = true
-            audioInputState.isAudioReady = true
+            audioInputState.isAudioReady = false
             updateStatusIcon()
 
             overlayWindow?.alphaValue = 0
@@ -198,6 +192,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
 
             let startupMilliseconds = Int(Date().timeIntervalSince(recordingRequestedAt) * 1000)
             print("[Izi Input] Recording started successfully. Startup latency: \(startupMilliseconds) ms.")
+
+            let warmupDuration = warmupDurationForInput(named: inputDeviceName)
+            if warmupDuration > 0 {
+                let warmupMilliseconds = Int(warmupDuration * 1000)
+                print("[Izi Input] Warming up audio input for \(warmupMilliseconds) ms.")
+                DispatchQueue.main.asyncAfter(deadline: .now() + warmupDuration) { [weak self, weak recorder] in
+                    guard let self = self,
+                          self.isRecording,
+                          let recorder = recorder,
+                          self.audioRecorder === recorder else {
+                        return
+                    }
+                    self.audioInputState.isAudioReady = true
+                    print("[Izi Input] Audio input is ready after warm-up.")
+                }
+            } else {
+                audioInputState.isAudioReady = true
+            }
         } catch {
             print("[Izi Input] Failed to start recording: \(error.localizedDescription)")
             isRecording = false
@@ -211,6 +223,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
         }
     }
 
+    func warmupDurationForInput(named inputDeviceName: String) -> TimeInterval {
+        let lowercasedName = inputDeviceName.lowercased()
+        if lowercasedName.contains("airpods") || lowercasedName.contains("bluetooth") {
+            return bluetoothInputWarmupDuration
+        }
+
+        return 0
+    }
+
     func stopRecording() {
         guard isRecording else { return }
 
@@ -218,6 +239,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
         meteringTimer?.invalidate()
         meteringTimer = nil
         audioInputState.isRecording = false
+        let wasAudioReady = audioInputState.isAudioReady
         audioInputState.isAudioReady = false // Reset to false
         audioInputState.amplitude = 0.0
 
@@ -236,6 +258,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
 
         // Only run transcription if we actually recorded something (audioRecorder was initialized)
         if hasRecorder {
+            guard wasAudioReady else {
+                finishRecordingWithoutTranscription(
+                    title: "Microphone Warming Up",
+                    text: "Wait for the red indicator before speaking."
+                )
+                return
+            }
+
             guard validateLastRecordingForTranscription() else { return }
 
             isProcessing = true
@@ -402,7 +432,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
 
     func runWhisperTranslation() {
         let modelPath = downloader.destinationURL.path
-        let audioPath = audioURLForWhisper().path
+        let audioPath = tempAudioURL.path
 
         // Look for whisper-cli in app bundle first, fallback to developer path
         var whisperExecutablePath = ""
@@ -432,7 +462,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
                 "-m", modelPath,
                 "-f", audioPath,
                 "-l", "ru",
-                "--no-timestamps"
+                "--no-timestamps",
+                "-sns"
             ]
             let ruPipe = Pipe()
             ruProcess.standardOutput = ruPipe
@@ -458,7 +489,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
                 "-m", modelPath,
                 "-f", audioPath,
                 "-tr",
-                "--no-timestamps"
+                "--no-timestamps",
+                "-sns"
             ]
             let enPipe = Pipe()
             enProcess.standardOutput = enPipe
@@ -488,127 +520,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
                 self.pasteText(englishText)
             }
         }
-    }
-
-    func audioURLForWhisper() -> URL {
-        guard let paddedURL = createWhisperAudioWithLeadingSilence() else {
-            return tempAudioURL
-        }
-
-        return paddedURL
-    }
-
-    func createWhisperAudioWithLeadingSilence() -> URL? {
-        do {
-            if FileManager.default.fileExists(atPath: tempWhisperAudioURL.path) {
-                try FileManager.default.removeItem(at: tempWhisperAudioURL)
-            }
-
-            let sourceFile = try AVAudioFile(forReading: tempAudioURL)
-            let sourceFrameCount = AVAudioFrameCount(sourceFile.length)
-            guard sourceFrameCount > 0 else { return nil }
-            guard let sourceBuffer = AVAudioPCMBuffer(pcmFormat: sourceFile.processingFormat, frameCapacity: sourceFrameCount) else { return nil }
-            try sourceFile.read(into: sourceBuffer)
-
-            let sourceFrameLength = Int(sourceBuffer.frameLength)
-            guard sourceFrameLength > 0 else { return nil }
-
-            let sampleRate = sourceFile.processingFormat.sampleRate
-            let leadingSilenceFrames = Int(sampleRate * whisperLeadingSilenceDuration)
-            let threshold = Float(pow(10.0, whisperTrimSilenceThresholdDBFS / 20.0))
-            let firstSpeechFrame = firstActiveFrame(in: sourceBuffer, threshold: threshold) ?? 0
-            let sourceStartFrame = max(0, firstSpeechFrame - leadingSilenceFrames)
-            let syntheticSilenceFrames = max(0, leadingSilenceFrames - firstSpeechFrame)
-            let framesToCopy = sourceFrameLength - sourceStartFrame
-            guard framesToCopy > 0 else { return nil }
-            guard let trimmedBuffer = copyAudioFrames(from: sourceBuffer, startingAt: sourceStartFrame, frameCount: framesToCopy) else { return nil }
-
-            let outputFile = try AVAudioFile(forWriting: tempWhisperAudioURL, settings: sourceFile.fileFormat.settings)
-
-            if syntheticSilenceFrames > 0,
-               let silenceBuffer = AVAudioPCMBuffer(
-                    pcmFormat: sourceFile.processingFormat,
-                    frameCapacity: AVAudioFrameCount(syntheticSilenceFrames)
-               ) {
-                silenceBuffer.frameLength = AVAudioFrameCount(syntheticSilenceFrames)
-                try outputFile.write(from: silenceBuffer)
-            }
-
-            try outputFile.write(from: trimmedBuffer)
-
-            let trimmedMilliseconds = Int(Double(sourceStartFrame) / sampleRate * 1000)
-            let syntheticSilenceMilliseconds = Int(Double(syntheticSilenceFrames) / sampleRate * 1000)
-            print(
-                "[Izi Input] Prepared Whisper audio: trimmedLeading=\(trimmedMilliseconds) ms, " +
-                "syntheticLeadingSilence=\(syntheticSilenceMilliseconds) ms."
-            )
-            return tempWhisperAudioURL
-        } catch {
-            print("[Izi Input] Failed to prepare Whisper audio with leading silence: \(error.localizedDescription)")
-            return nil
-        }
-    }
-
-    func firstActiveFrame(in buffer: AVAudioPCMBuffer, threshold: Float) -> Int? {
-        let frameLength = Int(buffer.frameLength)
-        let channelCount = Int(buffer.format.channelCount)
-        guard frameLength > 0, channelCount > 0 else { return nil }
-
-        if let channelData = buffer.floatChannelData {
-            for frame in 0..<frameLength {
-                for channel in 0..<channelCount {
-                    if abs(channelData[channel][frame]) >= threshold {
-                        return frame
-                    }
-                }
-            }
-        } else if let channelData = buffer.int16ChannelData {
-            for frame in 0..<frameLength {
-                for channel in 0..<channelCount {
-                    let sample = Float(abs(Int(channelData[channel][frame]))) / Float(Int16.max)
-                    if sample >= threshold {
-                        return frame
-                    }
-                }
-            }
-        }
-
-        return nil
-    }
-
-    func copyAudioFrames(from sourceBuffer: AVAudioPCMBuffer, startingAt startFrame: Int, frameCount: Int) -> AVAudioPCMBuffer? {
-        guard frameCount > 0,
-              startFrame >= 0,
-              startFrame + frameCount <= Int(sourceBuffer.frameLength),
-              let destinationBuffer = AVAudioPCMBuffer(
-                  pcmFormat: sourceBuffer.format,
-                  frameCapacity: AVAudioFrameCount(frameCount)
-              ) else {
-            return nil
-        }
-
-        let channelCount = Int(sourceBuffer.format.channelCount)
-        destinationBuffer.frameLength = AVAudioFrameCount(frameCount)
-
-        if let sourceData = sourceBuffer.floatChannelData,
-           let destinationData = destinationBuffer.floatChannelData {
-            for channel in 0..<channelCount {
-                for frame in 0..<frameCount {
-                    destinationData[channel][frame] = sourceData[channel][startFrame + frame]
-                }
-            }
-        } else if let sourceData = sourceBuffer.int16ChannelData,
-                  let destinationData = destinationBuffer.int16ChannelData {
-            for channel in 0..<channelCount {
-                for frame in 0..<frameCount {
-                    destinationData[channel][frame] = sourceData[channel][startFrame + frame]
-                }
-            }
-        } else {
-            return nil
-        }
-
-        return destinationBuffer
     }
 
     // MARK: - Keystroke Simulation (Paste)
