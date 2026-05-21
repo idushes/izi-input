@@ -72,25 +72,33 @@ struct WaveBar: View {
 struct OverlayView: View {
     @ObservedObject var audioInputState: AudioInputState
     @State private var isPulsing = false
-    @State private var phase = 0.0
     
     var body: some View {
         HStack(spacing: 8) { // compact spacing
             // Pulsing Red Recording Indicator
             Circle()
-                .fill(Color.red)
+                .fill(audioInputState.isAudioReady ? Color.red : Color.orange)
                 .frame(width: 6, height: 6)
-                .scaleEffect(isPulsing ? 1.25 : 0.75)
-                .opacity(isPulsing ? 1.0 : 0.4)
+                .scaleEffect(audioInputState.isAudioReady && isPulsing ? 1.25 : 0.75)
+                .opacity(audioInputState.isAudioReady && isPulsing ? 1.0 : 0.5)
                 .animation(
-                    .easeInOut(duration: 0.6).repeatForever(autoreverses: true),
+                    audioInputState.isAudioReady 
+                        ? .easeInOut(duration: 0.6).repeatForever(autoreverses: true)
+                        : .default,
                     value: isPulsing
                 )
             
-            // Voice reactive wave bar visualization
-            HStack(spacing: 2.5) {
-                ForEach(0..<7) { i in
-                    WaveBar(amplitude: audioInputState.amplitude, index: i, phase: phase)
+            // Voice reactive wave bar visualization using TimelineView for continuous, 60fps animations
+            TimelineView(.animation) { timelineContext in
+                let time = timelineContext.date.timeIntervalSinceReferenceDate
+                HStack(spacing: 2.5) {
+                    ForEach(0..<7) { i in
+                        WaveBar(
+                            amplitude: audioInputState.isAudioReady ? audioInputState.amplitude : 0.0, 
+                            index: i, 
+                            phase: time * 4.0 // 4.0 speed multiplier for perfect breathing wave rate
+                        )
+                    }
                 }
             }
             .frame(width: 40, height: 30)
@@ -117,10 +125,6 @@ struct OverlayView: View {
         .padding(10) // Padding to prevent clipping the shadow
         .onAppear {
             isPulsing = true
-            // Continuous breathing animation for the wave
-            withAnimation(.linear(duration: 1.5).repeatForever(autoreverses: false)) {
-                phase = Double.pi * 2
-            }
         }
     }
 }

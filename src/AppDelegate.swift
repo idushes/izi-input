@@ -129,6 +129,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
         isRecording = true
         shouldStopRecording = false
         audioInputState.isRecording = true
+        audioInputState.isAudioReady = false // Initialize as false (Warming Up / Orange state)
         updateStatusIcon()
         
         // Fade-in the visual overlay instantly on the main thread!
@@ -151,6 +152,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
                 DispatchQueue.main.async {
                     self.isRecording = false
                     self.audioInputState.isRecording = false
+                    self.audioInputState.isAudioReady = false
                     self.updateStatusIcon()
                     self.overlayWindow?.orderOut(nil)
                 }
@@ -177,6 +179,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
                     DispatchQueue.main.async {
                         self.isRecording = false
                         self.audioInputState.isRecording = false
+                        self.audioInputState.isAudioReady = false
                         self.updateStatusIcon()
                         self.overlayWindow?.orderOut(nil)
                     }
@@ -193,8 +196,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
                         print("[Izi Input] Recording stopped right at start.")
                         self.audioRecorder?.stop()
                         self.audioRecorder = nil
+                        self.audioInputState.isAudioReady = false
                         return
                     }
+                    
+                    self.audioInputState.isAudioReady = true // Set to true (Recording / Red state)
                     
                     // Start voice metering timer (50ms interval)
                     self.meteringTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
@@ -211,6 +217,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
                 DispatchQueue.main.async {
                     self.isRecording = false
                     self.audioInputState.isRecording = false
+                    self.audioInputState.isAudioReady = false
                     self.updateStatusIcon()
                     self.overlayWindow?.orderOut(nil)
                 }
@@ -227,6 +234,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
         meteringTimer?.invalidate()
         meteringTimer = nil
         audioInputState.isRecording = false
+        audioInputState.isAudioReady = false // Reset to false
         audioInputState.amplitude = 0.0
         
         let hasRecorder = audioRecorder != nil
