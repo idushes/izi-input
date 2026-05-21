@@ -531,13 +531,38 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
         pasteboard.setString(text, forType: .string)
         print("[Izi Input] Clipboard set to: \"\(text)\"")
 
-        // Simulate Cmd+V keystroke using session event tap
-        let cmdDown = CGEvent(keyboardEventSource: nil, virtualKey: 0x37, keyDown: true)
-        let cmdUp = CGEvent(keyboardEventSource: nil, virtualKey: 0x37, keyDown: false)
-        let vDown = CGEvent(keyboardEventSource: nil, virtualKey: 0x09, keyDown: true)
-        let vUp = CGEvent(keyboardEventSource: nil, virtualKey: 0x09, keyDown: false)
+        guard hasAccessibilityPermissionForPaste() else { return }
 
-        // Apply Command modifier flags to key press events
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            self.postPasteShortcut()
+        }
+    }
+
+    func hasAccessibilityPermissionForPaste() -> Bool {
+        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+        let accessEnabled = AXIsProcessTrustedWithOptions(options)
+        guard accessEnabled else {
+            showNotification(
+                title: "Accessibility Required",
+                text: "Text is in the clipboard. Enable Accessibility for IziInput to paste automatically."
+            )
+            print("[Izi Input] Automatic paste skipped: Accessibility permission is not trusted.")
+            return false
+        }
+
+        return true
+    }
+
+    func postPasteShortcut() {
+        let source = CGEventSource(stateID: .hidSystemState)
+        source?.localEventsSuppressionInterval = 0
+
+        let cmdDown = CGEvent(keyboardEventSource: source, virtualKey: 0x37, keyDown: true)
+        let cmdUp = CGEvent(keyboardEventSource: source, virtualKey: 0x37, keyDown: false)
+        let vDown = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: true)
+        let vUp = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: false)
+
+        cmdDown?.flags = .maskCommand
         vDown?.flags = .maskCommand
         vUp?.flags = .maskCommand
 
