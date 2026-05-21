@@ -12,7 +12,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
     var wasFnPressed = false
     var isRecording = false
     var isProcessing = false
-    var shouldStopRecording = false
 
     // Transparent overlay window for voice indicator
     var overlayWindow: OverlayWindow?
@@ -22,10 +21,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
     private let minimumRecordingDuration: TimeInterval = 0.35
     private let silencePeakThresholdDBFS = -50.0
     private let silenceRMSThresholdDBFS = -55.0
+    private let whisperLeadingSilenceDuration: TimeInterval = 0.25
 
     // Temporary audio file path
     var tempAudioURL: URL {
         return FileManager.default.temporaryDirectory.appendingPathComponent("izi_input_temp.wav")
+    }
+
+    var tempWhisperAudioURL: URL {
+        return FileManager.default.temporaryDirectory.appendingPathComponent("izi_input_whisper.wav")
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -139,112 +143,75 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
 
         guard hasMicrophonePermission() else { return }
 
-        isRecording = true
-        shouldStopRecording = false
-        audioInputState.isRecording = true
-        audioInputState.isAudioReady = false // Initialize as false (Warming Up / Orange state)
-        updateStatusIcon()
+        let recordingRequestedAt = Date()
 
-        // Fade-in the visual overlay instantly on the main thread!
-        overlayWindow?.alphaValue = 0
-        overlayWindow?.updatePosition()
-        overlayWindow?.orderFrontRegardless()
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.15
-            overlayWindow?.animator().alphaValue = 1.0
-        }
-
-        print("[Izi Input] Initializing audio recording in background...")
+        print("[Izi Input] Initializing audio recording...")
         if let inputDevice = AVCaptureDevice.default(for: .audio) {
             print("[Izi Input] Default audio input device: \(inputDevice.localizedName)")
         }
 
-        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
-            guard let self = self else { return }
+        let settings: [String: Any] = [
+            AVFormatIDKey: Int(kAudioFormatLinearPCM),
+            AVSampleRateKey: 16000.0,
+            AVNumberOfChannelsKey: 1,
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsBigEndianKey: false,
+            AVLinearPCMIsFloatKey: false
+        ]
 
-            // Check if user already released Fn before we initialized
-            if self.shouldStopRecording {
-                print("[Izi Input] Recording cancelled before starting.")
-                DispatchQueue.main.async {
-                    self.isRecording = false
-                    self.audioInputState.isRecording = false
-                    self.audioInputState.isAudioReady = false
-                    self.updateStatusIcon()
-                    self.overlayWindow?.orderOut(nil)
-                }
-                return
+        do {
+            let recorder = try AVAudioRecorder(url: tempAudioURL, settings: settings)
+            recorder.isMeteringEnabled = true
+            recorder.prepareToRecord()
+
+            guard recorder.record() else {
+                throw NSError(
+                    domain: "IziInput",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "AVAudioRecorder refused to start recording."]
+                )
             }
 
-            let settings: [String: Any] = [
-                AVFormatIDKey: Int(kAudioFormatLinearPCM),
-                AVSampleRateKey: 16000.0,
-                AVNumberOfChannelsKey: 1,
-                AVLinearPCMBitDepthKey: 16,
-                AVLinearPCMIsBigEndianKey: false,
-                AVLinearPCMIsFloatKey: false
-            ]
+            audioRecorder = recorder
+            isRecording = true
+            audioInputState.isRecording = true
+            audioInputState.isAudioReady = true
+            updateStatusIcon()
 
-            do {
-                let recorder = try AVAudioRecorder(url: self.tempAudioURL, settings: settings)
-                recorder.isMeteringEnabled = true
-                recorder.prepareToRecord()
-
-                // Double check if cancelled during preparation
-                if self.shouldStopRecording {
-                    print("[Izi Input] Recording cancelled during preparation.")
-                    DispatchQueue.main.async {
-                        self.isRecording = false
-                        self.audioInputState.isRecording = false
-                        self.audioInputState.isAudioReady = false
-                        self.updateStatusIcon()
-                        self.overlayWindow?.orderOut(nil)
-                    }
-                    return
-                }
-
-                recorder.record()
-
-                DispatchQueue.main.async {
-                    self.audioRecorder = recorder
-
-                    // In case we were stopped while dispatching to main thread
-                    if self.shouldStopRecording {
-                        print("[Izi Input] Recording stopped right at start.")
-                        self.audioRecorder?.stop()
-                        self.audioRecorder = nil
-                        self.audioInputState.isAudioReady = false
-                        return
-                    }
-
-                    self.audioInputState.isAudioReady = true // Set to true (Recording / Red state)
-
-                    // Start voice metering timer (50ms interval)
-                    self.meteringTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
-                        guard let self = self, let recorder = self.audioRecorder else { return }
-                        recorder.updateMeters()
-                        let power = recorder.averagePower(forChannel: 0)
-                        let normalized = CGFloat(max(0.0, (power + 50.0) / 50.0))
-                        self.audioInputState.amplitude = normalized
-                    }
-                    print("[Izi Input] Recording started successfully.")
-                }
-            } catch {
-                print("[Izi Input] Failed to start recording in background: \(error.localizedDescription)")
-                DispatchQueue.main.async {
-                    self.isRecording = false
-                    self.audioInputState.isRecording = false
-                    self.audioInputState.isAudioReady = false
-                    self.updateStatusIcon()
-                    self.overlayWindow?.orderOut(nil)
-                }
+            overlayWindow?.alphaValue = 0
+            overlayWindow?.updatePosition()
+            overlayWindow?.orderFrontRegardless()
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.15
+                overlayWindow?.animator().alphaValue = 1.0
             }
+
+            meteringTimer?.invalidate()
+            meteringTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+                guard let self = self, let recorder = self.audioRecorder else { return }
+                recorder.updateMeters()
+                let power = recorder.averagePower(forChannel: 0)
+                let normalized = CGFloat(max(0.0, (power + 50.0) / 50.0))
+                self.audioInputState.amplitude = normalized
+            }
+
+            let startupMilliseconds = Int(Date().timeIntervalSince(recordingRequestedAt) * 1000)
+            print("[Izi Input] Recording started successfully. Startup latency: \(startupMilliseconds) ms.")
+        } catch {
+            print("[Izi Input] Failed to start recording: \(error.localizedDescription)")
+            isRecording = false
+            audioRecorder = nil
+            audioInputState.isRecording = false
+            audioInputState.isAudioReady = false
+            audioInputState.amplitude = 0.0
+            updateStatusIcon()
+            overlayWindow?.orderOut(nil)
+            showNotification(title: "Recording Failed", text: error.localizedDescription)
         }
     }
 
     func stopRecording() {
         guard isRecording else { return }
-
-        shouldStopRecording = true
 
         // Stop metering timer
         meteringTimer?.invalidate()
@@ -434,7 +401,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
 
     func runWhisperTranslation() {
         let modelPath = downloader.destinationURL.path
-        let audioPath = tempAudioURL.path
+        let audioPath = audioURLForWhisper().path
 
         // Look for whisper-cli in app bundle first, fallback to developer path
         var whisperExecutablePath = ""
@@ -519,6 +486,43 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
             if !englishText.isEmpty {
                 self.pasteText(englishText)
             }
+        }
+    }
+
+    func audioURLForWhisper() -> URL {
+        guard let paddedURL = createWhisperAudioWithLeadingSilence() else {
+            return tempAudioURL
+        }
+
+        return paddedURL
+    }
+
+    func createWhisperAudioWithLeadingSilence() -> URL? {
+        do {
+            if FileManager.default.fileExists(atPath: tempWhisperAudioURL.path) {
+                try FileManager.default.removeItem(at: tempWhisperAudioURL)
+            }
+
+            let sourceFile = try AVAudioFile(forReading: tempAudioURL)
+            let frameCount = AVAudioFrameCount(sourceFile.length)
+            guard frameCount > 0 else { return nil }
+            guard let sourceBuffer = AVAudioPCMBuffer(pcmFormat: sourceFile.processingFormat, frameCapacity: frameCount) else { return nil }
+            try sourceFile.read(into: sourceBuffer)
+
+            let silenceFrames = AVAudioFrameCount(sourceFile.processingFormat.sampleRate * whisperLeadingSilenceDuration)
+            let outputFile = try AVAudioFile(forWriting: tempWhisperAudioURL, settings: sourceFile.fileFormat.settings)
+
+            if silenceFrames > 0, let silenceBuffer = AVAudioPCMBuffer(pcmFormat: sourceFile.processingFormat, frameCapacity: silenceFrames) {
+                silenceBuffer.frameLength = silenceFrames
+                try outputFile.write(from: silenceBuffer)
+            }
+
+            try outputFile.write(from: sourceBuffer)
+            print("[Izi Input] Added \(String(format: "%.2f", whisperLeadingSilenceDuration))s leading silence for Whisper input.")
+            return tempWhisperAudioURL
+        } catch {
+            print("[Izi Input] Failed to prepare Whisper audio with leading silence: \(error.localizedDescription)")
+            return nil
         }
     }
 
