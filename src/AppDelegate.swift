@@ -12,6 +12,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
     var wasFnPressed = false
     var isRecording = false
     var isProcessing = false
+    var shouldStopRecording = false
     
     // Transparent overlay window for voice indicator
     var overlayWindow: OverlayWindow?
@@ -125,66 +126,102 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
             return
         }
         
-        // Microphone access check
-        let status = AVCaptureDevice.authorizationStatus(for: .audio)
-        guard status == .authorized else {
-            showNotification(title: "Microphone Access Required", text: "Please enable Microphone permissions for this app.")
-            requestMicrophonePermission()
-            return
+        isRecording = true
+        shouldStopRecording = false
+        audioInputState.isRecording = true
+        updateStatusIcon()
+        
+        // Fade-in the visual overlay instantly on the main thread!
+        overlayWindow?.alphaValue = 0
+        overlayWindow?.updatePosition()
+        overlayWindow?.orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.15
+            overlayWindow?.animator().alphaValue = 1.0
         }
         
-        // Audio Recorder Settings: 16000Hz, 1 channel, 16-bit PCM (Required by whisper.cpp)
-        let settings: [String: Any] = [
-            AVFormatIDKey: Int(kAudioFormatLinearPCM),
-            AVSampleRateKey: 16000.0,
-            AVNumberOfChannelsKey: 1,
-            AVLinearPCMBitDepthKey: 16,
-            AVLinearPCMIsBigEndianKey: false,
-            AVLinearPCMIsFloatKey: false
-        ]
+        print("[Izi Input] Initializing audio recording in background...")
         
-        do {
-            audioRecorder = try AVAudioRecorder(url: tempAudioURL, settings: settings)
-            audioRecorder?.prepareToRecord()
+        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
+            guard let self = self else { return }
             
-            // Enable voice level metering
-            audioRecorder?.isMeteringEnabled = true
-            audioRecorder?.record()
-            
-            isRecording = true
-            updateStatusIcon()
-            
-            // Start voice metering timer (50ms interval)
-            audioInputState.isRecording = true
-            meteringTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
-                guard let self = self, let recorder = self.audioRecorder else { return }
-                recorder.updateMeters()
-                let power = recorder.averagePower(forChannel: 0)
-                
-                // Map dB power (-50dB to 0dB) to normalized range 0.0 to 1.0
-                let normalized = CGFloat(max(0.0, (power + 50.0) / 50.0))
+            // Check if user already released Fn before we initialized
+            if self.shouldStopRecording {
+                print("[Izi Input] Recording cancelled before starting.")
                 DispatchQueue.main.async {
-                    self.audioInputState.amplitude = normalized
+                    self.isRecording = false
+                    self.audioInputState.isRecording = false
+                    self.updateStatusIcon()
+                    self.overlayWindow?.orderOut(nil)
+                }
+                return
+            }
+            
+            let settings: [String: Any] = [
+                AVFormatIDKey: Int(kAudioFormatLinearPCM),
+                AVSampleRateKey: 16000.0,
+                AVNumberOfChannelsKey: 1,
+                AVLinearPCMBitDepthKey: 16,
+                AVLinearPCMIsBigEndianKey: false,
+                AVLinearPCMIsFloatKey: false
+            ]
+            
+            do {
+                let recorder = try AVAudioRecorder(url: self.tempAudioURL, settings: settings)
+                recorder.isMeteringEnabled = true
+                recorder.prepareToRecord()
+                
+                // Double check if cancelled during preparation
+                if self.shouldStopRecording {
+                    print("[Izi Input] Recording cancelled during preparation.")
+                    DispatchQueue.main.async {
+                        self.isRecording = false
+                        self.audioInputState.isRecording = false
+                        self.updateStatusIcon()
+                        self.overlayWindow?.orderOut(nil)
+                    }
+                    return
+                }
+                
+                recorder.record()
+                
+                DispatchQueue.main.async {
+                    self.audioRecorder = recorder
+                    
+                    // In case we were stopped while dispatching to main thread
+                    if self.shouldStopRecording {
+                        print("[Izi Input] Recording stopped right at start.")
+                        self.audioRecorder?.stop()
+                        self.audioRecorder = nil
+                        return
+                    }
+                    
+                    // Start voice metering timer (50ms interval)
+                    self.meteringTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+                        guard let self = self, let recorder = self.audioRecorder else { return }
+                        recorder.updateMeters()
+                        let power = recorder.averagePower(forChannel: 0)
+                        let normalized = CGFloat(max(0.0, (power + 50.0) / 50.0))
+                        self.audioInputState.amplitude = normalized
+                    }
+                    print("[Izi Input] Recording started successfully.")
+                }
+            } catch {
+                print("[Izi Input] Failed to start recording in background: \(error.localizedDescription)")
+                DispatchQueue.main.async {
+                    self.isRecording = false
+                    self.audioInputState.isRecording = false
+                    self.updateStatusIcon()
+                    self.overlayWindow?.orderOut(nil)
                 }
             }
-            
-            // Fade-in the visual overlay at the bottom of the screen
-            overlayWindow?.alphaValue = 0
-            overlayWindow?.updatePosition()
-            overlayWindow?.orderFrontRegardless()
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.2
-                overlayWindow?.animator().alphaValue = 1.0
-            }
-            
-            print("[Izi Input] Recording started...")
-        } catch {
-            print("[Izi Input] Failed to start recording: \(error.localizedDescription)")
         }
     }
     
     func stopRecording() {
         guard isRecording else { return }
+        
+        shouldStopRecording = true
         
         // Stop metering timer
         meteringTimer?.invalidate()
@@ -192,11 +229,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
         audioInputState.isRecording = false
         audioInputState.amplitude = 0.0
         
+        let hasRecorder = audioRecorder != nil
         audioRecorder?.stop()
         audioRecorder = nil
         isRecording = false
-        isProcessing = true
-        updateStatusIcon()
         
         // Fade-out the visual overlay
         NSAnimationContext.runAnimationGroup({ context in
@@ -206,11 +242,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
             self.overlayWindow?.orderOut(nil)
         }
         
-        print("[Izi Input] Recording stopped. Starting transcription...")
-        
-        // Process on background thread to keep UI interactive
-        DispatchQueue.global(qos: .userInitiated).async {
-            self.runWhisperTranslation()
+        // Only run transcription if we actually recorded something (audioRecorder was initialized)
+        if hasRecorder {
+            isProcessing = true
+            updateStatusIcon()
+            print("[Izi Input] Recording stopped. Starting transcription...")
+            
+            // Process on background thread to keep UI interactive
+            DispatchQueue.global(qos: .userInitiated).async {
+                self.runWhisperTranslation()
+            }
+        } else {
+            print("[Izi Input] Recording cancelled or too short; skipping transcription.")
+            updateStatusIcon()
         }
     }
     
