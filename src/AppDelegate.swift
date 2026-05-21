@@ -21,6 +21,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
     private let minimumRecordingDuration: TimeInterval = 0.35
     private let silencePeakThresholdDBFS = -50.0
     private let silenceRMSThresholdDBFS = -55.0
+    private let standardReadyIndicatorDelay: TimeInterval = 0.25
+    private let bluetoothReadyIndicatorDelay: TimeInterval = 0.60
 
     // Temporary audio file path
     var tempAudioURL: URL {
@@ -169,16 +171,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
             audioRecorder = recorder
             isRecording = true
             audioInputState.isRecording = true
-            audioInputState.isAudioReady = true
+            audioInputState.isAudioReady = false
             updateStatusIcon()
-
-            overlayWindow?.alphaValue = 0
-            overlayWindow?.updatePosition()
-            overlayWindow?.orderFrontRegardless()
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.15
-                overlayWindow?.animator().alphaValue = 1.0
-            }
 
             meteringTimer?.invalidate()
             meteringTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
@@ -191,6 +185,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
 
             let startupMilliseconds = Int(Date().timeIntervalSince(recordingRequestedAt) * 1000)
             print("[Izi Input] Recording started successfully. Startup latency: \(startupMilliseconds) ms.")
+
+            let readyDelay = readyIndicatorDelayForInput(named: inputDeviceName)
+            let readyDelayMilliseconds = Int(readyDelay * 1000)
+            print("[Izi Input] Delaying recording indicator for \(readyDelayMilliseconds) ms to avoid clipped starts.")
+            DispatchQueue.main.asyncAfter(deadline: .now() + readyDelay) { [weak self, weak recorder] in
+                guard let self = self,
+                      self.isRecording,
+                      let recorder = recorder,
+                      self.audioRecorder === recorder else {
+                    return
+                }
+
+                self.audioInputState.isAudioReady = true
+                self.showRecordingOverlay()
+                print("[Izi Input] Recording indicator shown after pre-roll.")
+            }
         } catch {
             print("[Izi Input] Failed to start recording: \(error.localizedDescription)")
             isRecording = false
@@ -201,6 +211,25 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
             updateStatusIcon()
             overlayWindow?.orderOut(nil)
             showNotification(title: "Recording Failed", text: error.localizedDescription)
+        }
+    }
+
+    func readyIndicatorDelayForInput(named inputDeviceName: String) -> TimeInterval {
+        let lowercasedName = inputDeviceName.lowercased()
+        if lowercasedName.contains("airpods") || lowercasedName.contains("bluetooth") {
+            return bluetoothReadyIndicatorDelay
+        }
+
+        return standardReadyIndicatorDelay
+    }
+
+    func showRecordingOverlay() {
+        overlayWindow?.alphaValue = 0
+        overlayWindow?.updatePosition()
+        overlayWindow?.orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.15
+            overlayWindow?.animator().alphaValue = 1.0
         }
     }
 
