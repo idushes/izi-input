@@ -80,22 +80,23 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
     }
 
     func observeOutputLanguage() {
-        outputLanguageObserver = audioInputState.$outputLanguage.sink { [weak self] _ in
-            self?.updateOutputLanguageUI()
+        outputLanguageObserver = audioInputState.$outputLanguage.sink { [weak self] language in
+            self?.updateOutputLanguageUI(for: language)
         }
     }
 
     @objc func outputLanguageMenuItemSelected(_ sender: NSMenuItem) {
         let selectedLanguage: OutputLanguage = sender.tag == 0 ? .russian : .english
         audioInputState.outputLanguage = selectedLanguage
-        updateOutputLanguageUI()
-        print("[Izi Input] Output language changed to \(audioInputState.outputLanguage.rawValue).")
+        updateOutputLanguageUI(for: selectedLanguage)
+        print("[Izi Input] Output language changed to \(selectedLanguage.rawValue).")
     }
 
-    func updateOutputLanguageUI() {
-        russianOutputMenuItem?.state = audioInputState.outputLanguage == .russian ? .on : .off
-        englishOutputMenuItem?.state = audioInputState.outputLanguage == .english ? .on : .off
-        updateStatusIcon()
+    func updateOutputLanguageUI(for language: OutputLanguage? = nil) {
+        let outputLanguage = language ?? audioInputState.outputLanguage
+        russianOutputMenuItem?.state = outputLanguage == .russian ? .on : .off
+        englishOutputMenuItem?.state = outputLanguage == .english ? .on : .off
+        updateStatusIcon(outputLanguage: outputLanguage)
     }
 
     @objc func showSettings() {
@@ -613,10 +614,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
 
     // MARK: - UI Helpers
 
-    func updateStatusIcon() {
+    func updateStatusIcon(outputLanguage: OutputLanguage? = nil) {
         guard let button = statusItem?.button else { return }
 
-        button.title = audioInputState.outputLanguage.shortTitle
+        button.title = (outputLanguage ?? audioInputState.outputLanguage).shortTitle
 
         if isRecording {
             button.image = NSImage(systemSymbolName: "mic.fill", accessibilityDescription: "Recording...")
