@@ -57,15 +57,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
             button.image = NSImage(systemSymbolName: "mic", accessibilityDescription: "Izi Input")
             button.imagePosition = .imageLeading
             button.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .semibold)
-            button.action = #selector(statusItemClicked(_:))
-            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
 
         let menu = NSMenu()
-        let russianItem = NSMenuItem(title: "Вставлять русский", action: #selector(selectRussianOutput), keyEquivalent: "")
-        let englishItem = NSMenuItem(title: "Вставлять English", action: #selector(selectEnglishOutput), keyEquivalent: "")
+        let russianItem = NSMenuItem(title: "Insert Russian", action: #selector(outputLanguageMenuItemSelected(_:)), keyEquivalent: "")
+        let englishItem = NSMenuItem(title: "Insert English", action: #selector(outputLanguageMenuItemSelected(_:)), keyEquivalent: "")
         russianItem.target = self
         englishItem.target = self
+        russianItem.tag = 0
+        englishItem.tag = 1
         russianOutputMenuItem = russianItem
         englishOutputMenuItem = englishItem
 
@@ -85,16 +85,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
         }
     }
 
-    @objc func selectRussianOutput() {
-        setOutputLanguage(.russian)
-    }
-
-    @objc func selectEnglishOutput() {
-        setOutputLanguage(.english)
-    }
-
-    func setOutputLanguage(_ language: OutputLanguage) {
-        audioInputState.outputLanguage = language
+    @objc func outputLanguageMenuItemSelected(_ sender: NSMenuItem) {
+        let selectedLanguage: OutputLanguage = sender.tag == 0 ? .russian : .english
+        audioInputState.outputLanguage = selectedLanguage
+        updateOutputLanguageUI()
         print("[Izi Input] Output language changed to \(audioInputState.outputLanguage.rawValue).")
     }
 
@@ -102,11 +96,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
         russianOutputMenuItem?.state = audioInputState.outputLanguage == .russian ? .on : .off
         englishOutputMenuItem?.state = audioInputState.outputLanguage == .english ? .on : .off
         updateStatusIcon()
-    }
-
-    @objc func statusItemClicked(_ sender: Any?) {
-        // Show menu on click
-        statusItem?.button?.performClick(nil)
     }
 
     @objc func showSettings() {
