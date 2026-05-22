@@ -1,10 +1,13 @@
 import Cocoa
 import SwiftUI
 import AVFoundation
+import Combine
 
 class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
     var statusItem: NSStatusItem?
     var settingsWindow: NSWindow?
+    var outputLanguageControl: NSSegmentedControl?
+    var outputLanguageObserver: AnyCancellable?
 
     let downloader = ModelDownloader()
     var audioRecorder: AVAudioRecorder?
@@ -31,6 +34,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusItem()
+        observeOutputLanguage()
         requestMicrophonePermission()
         checkAccessibilityPermission() // Prompts macOS to request Accessibility if missing or invalid
         setupGlobalKeyListener()
@@ -55,10 +59,52 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
         }
 
         let menu = NSMenu()
+        menu.addItem(makeOutputLanguageMenuItem())
+        menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Settings...", action: #selector(showSettings), keyEquivalent: ","))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q"))
         statusItem?.menu = menu
+    }
+
+    func observeOutputLanguage() {
+        outputLanguageObserver = audioInputState.$outputLanguage.sink { [weak self] language in
+            self?.outputLanguageControl?.selectedSegment = language == .russian ? 0 : 1
+        }
+    }
+
+    func makeOutputLanguageMenuItem() -> NSMenuItem {
+        let item = NSMenuItem()
+        let view = NSView(frame: NSRect(x: 0, y: 0, width: 166, height: 34))
+
+        let label = NSTextField(labelWithString: "Вставлять")
+        label.font = NSFont.systemFont(ofSize: 11, weight: .medium)
+        label.textColor = .secondaryLabelColor
+        label.frame = NSRect(x: 12, y: 8, width: 62, height: 18)
+        view.addSubview(label)
+
+        let control = NSSegmentedControl(
+            labels: OutputLanguage.allCases.map { $0.shortTitle },
+            trackingMode: .selectOne,
+            target: self,
+            action: #selector(outputLanguageChanged(_:))
+        )
+        control.segmentStyle = .rounded
+        control.controlSize = .small
+        control.selectedSegment = audioInputState.outputLanguage == .russian ? 0 : 1
+        control.setWidth(38, forSegment: 0)
+        control.setWidth(38, forSegment: 1)
+        control.frame = NSRect(x: 78, y: 5, width: 76, height: 24)
+        view.addSubview(control)
+
+        outputLanguageControl = control
+        item.view = view
+        return item
+    }
+
+    @objc func outputLanguageChanged(_ sender: NSSegmentedControl) {
+        audioInputState.outputLanguage = sender.selectedSegment == 0 ? .russian : .english
+        print("[Izi Input] Output language changed to \(audioInputState.outputLanguage.rawValue).")
     }
 
     @objc func statusItemClicked(_ sender: Any?) {
@@ -80,7 +126,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
             let window = NSWindow(contentViewController: hostingController)
             window.title = "Izi Input Settings"
             window.styleMask = [.titled, .closable, .miniaturizable]
-            window.setContentSize(NSSize(width: 480, height: 680))
+            window.setContentSize(NSSize(width: 440, height: 560))
             window.center()
             window.isReleasedWhenClosed = false
 
@@ -508,9 +554,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
             self.audioInputState.lastEnglishText = englishText
             self.audioInputState.hasLastAudio = FileManager.default.fileExists(atPath: self.tempAudioURL.path)
 
-            if !englishText.isEmpty {
-                self.pasteText(englishText)
+            let outputText = self.textForSelectedOutputLanguage(
+                russianText: russianText,
+                englishText: englishText
+            )
+            if !outputText.isEmpty {
+                self.pasteText(outputText)
             }
+        }
+    }
+
+    func textForSelectedOutputLanguage(russianText: String, englishText: String) -> String {
+        switch audioInputState.outputLanguage {
+        case .russian:
+            return russianText
+        case .english:
+            return englishText
         }
     }
 
