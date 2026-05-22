@@ -6,7 +6,8 @@ import Combine
 class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
     var statusItem: NSStatusItem?
     var settingsWindow: NSWindow?
-    var outputLanguageControl: NSSegmentedControl?
+    var russianOutputMenuItem: NSMenuItem?
+    var englishOutputMenuItem: NSMenuItem?
     var outputLanguageObserver: AnyCancellable?
 
     let downloader = ModelDownloader()
@@ -54,57 +55,53 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem?.button {
             button.image = NSImage(systemSymbolName: "mic", accessibilityDescription: "Izi Input")
+            button.imagePosition = .imageLeading
+            button.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .semibold)
             button.action = #selector(statusItemClicked(_:))
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
 
         let menu = NSMenu()
-        menu.addItem(makeOutputLanguageMenuItem())
+        let russianItem = NSMenuItem(title: "Вставлять русский", action: #selector(selectRussianOutput), keyEquivalent: "")
+        let englishItem = NSMenuItem(title: "Вставлять English", action: #selector(selectEnglishOutput), keyEquivalent: "")
+        russianItem.target = self
+        englishItem.target = self
+        russianOutputMenuItem = russianItem
+        englishOutputMenuItem = englishItem
+
+        menu.addItem(russianItem)
+        menu.addItem(englishItem)
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Settings...", action: #selector(showSettings), keyEquivalent: ","))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q"))
         statusItem?.menu = menu
+        updateOutputLanguageUI()
     }
 
     func observeOutputLanguage() {
-        outputLanguageObserver = audioInputState.$outputLanguage.sink { [weak self] language in
-            self?.outputLanguageControl?.selectedSegment = language == .russian ? 0 : 1
+        outputLanguageObserver = audioInputState.$outputLanguage.sink { [weak self] _ in
+            self?.updateOutputLanguageUI()
         }
     }
 
-    func makeOutputLanguageMenuItem() -> NSMenuItem {
-        let item = NSMenuItem()
-        let view = NSView(frame: NSRect(x: 0, y: 0, width: 166, height: 34))
-
-        let label = NSTextField(labelWithString: "Вставлять")
-        label.font = NSFont.systemFont(ofSize: 11, weight: .medium)
-        label.textColor = .secondaryLabelColor
-        label.frame = NSRect(x: 12, y: 8, width: 62, height: 18)
-        view.addSubview(label)
-
-        let control = NSSegmentedControl(
-            labels: OutputLanguage.allCases.map { $0.shortTitle },
-            trackingMode: .selectOne,
-            target: self,
-            action: #selector(outputLanguageChanged(_:))
-        )
-        control.segmentStyle = .rounded
-        control.controlSize = .small
-        control.selectedSegment = audioInputState.outputLanguage == .russian ? 0 : 1
-        control.setWidth(38, forSegment: 0)
-        control.setWidth(38, forSegment: 1)
-        control.frame = NSRect(x: 78, y: 5, width: 76, height: 24)
-        view.addSubview(control)
-
-        outputLanguageControl = control
-        item.view = view
-        return item
+    @objc func selectRussianOutput() {
+        setOutputLanguage(.russian)
     }
 
-    @objc func outputLanguageChanged(_ sender: NSSegmentedControl) {
-        audioInputState.outputLanguage = sender.selectedSegment == 0 ? .russian : .english
+    @objc func selectEnglishOutput() {
+        setOutputLanguage(.english)
+    }
+
+    func setOutputLanguage(_ language: OutputLanguage) {
+        audioInputState.outputLanguage = language
         print("[Izi Input] Output language changed to \(audioInputState.outputLanguage.rawValue).")
+    }
+
+    func updateOutputLanguageUI() {
+        russianOutputMenuItem?.state = audioInputState.outputLanguage == .russian ? .on : .off
+        englishOutputMenuItem?.state = audioInputState.outputLanguage == .english ? .on : .off
+        updateStatusIcon()
     }
 
     @objc func statusItemClicked(_ sender: Any?) {
@@ -629,6 +626,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
 
     func updateStatusIcon() {
         guard let button = statusItem?.button else { return }
+
+        button.title = audioInputState.outputLanguage.shortTitle
 
         if isRecording {
             button.image = NSImage(systemSymbolName: "mic.fill", accessibilityDescription: "Recording...")
