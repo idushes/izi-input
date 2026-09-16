@@ -6,6 +6,8 @@ struct SettingsView: View {
     @ObservedObject var audioInputState: AudioInputState
     let onPlayPause: () -> Void
 
+    @State private var apiKeyDraft = ""
+    @State private var keyStatus = ""
     @State private var hasAccessibilityAccess: Bool = false
 
     let timer = Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()
@@ -18,7 +20,10 @@ struct SettingsView: View {
 
             ScrollView {
                 VStack(spacing: 12) {
-                    modelSection
+                    providerSection
+                    if audioInputState.transcriptionProvider == .local {
+                        modelSection
+                    }
 
                     if audioInputState.hasLastAudio {
                         lastRecordingSection
@@ -70,6 +75,54 @@ struct SettingsView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
+    }
+
+    private var providerSection: some View {
+        section(title: "Распознавание", icon: "waveform", color: .blue) {
+            Picker("Провайдер", selection: $audioInputState.transcriptionProvider) {
+                ForEach(TranscriptionProvider.allCases) { provider in
+                    Text(provider.title).tag(provider)
+                }
+            }
+            if audioInputState.transcriptionProvider == .openRouter {
+                Picker("Модель", selection: $audioInputState.openRouterModel) {
+                    ForEach(OpenRouterModels.all, id: \.self) { model in
+                        Text(model).tag(model)
+                    }
+                }
+                TextField("Модель перевода ENG", text: $audioInputState.translationModel)
+                    .textFieldStyle(.roundedBorder)
+                Text("Для ENG текст переводится отдельным платным запросом через указанную модель. Для RUS перевод не вызывается.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                SecureField("API-ключ OpenRouter", text: $apiKeyDraft)
+                    .textFieldStyle(.roundedBorder)
+                HStack {
+                    Button("Сохранить ключ") { saveKey(apiKeyDraft) }
+                        .disabled(apiKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    Button("Удалить ключ") { saveKey("") }
+                }
+                Text(keyStatus.isEmpty ? "Ключ хранится в macOS Keychain. Для замены введите новый ключ." : keyStatus)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Text("Аудио отправляется в OpenRouter и провайдеру выбранной модели. Запросы оплачиваются с вашего баланса.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .disabled(audioInputState.isRecording || audioInputState.isProcessing)
+    }
+
+    private func saveKey(_ value: String) {
+        do {
+            let key = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            try APIKeyStore.save(key)
+            apiKeyDraft = ""
+            keyStatus = key.isEmpty ? "Ключ удалён." : "Ключ сохранён в Keychain."
+        } catch {
+            keyStatus = error.localizedDescription
+        }
     }
 
     private var modelSection: some View {

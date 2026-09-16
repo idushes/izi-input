@@ -15,7 +15,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
     var audioPlayer: AVAudioPlayer?
     var wasFnPressed = false
     var isRecording = false
-    var isProcessing = false
+    var isProcessing = false {
+        didSet { audioInputState.isProcessing = isProcessing }
+    }
+    private var recordingProvider = TranscriptionProvider.local
+    private var recordingModel = ""
+    private var recordingTranslationModel = ""
+    private var recordingOutputLanguage = OutputLanguage.english
+    private var recordingAPIKey = ""
 
     // Transparent overlay window for voice indicator
     var overlayWindow: OverlayWindow?
@@ -46,7 +53,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
         overlayWindow = OverlayWindow(contentView: hostingView)
 
         // Open settings automatically on first launch if model is not downloaded
-        if !downloader.isModelDownloaded {
+        if audioInputState.transcriptionProvider == .local && !downloader.isModelDownloaded {
             showSettings()
         }
     }
@@ -165,13 +172,33 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
     func startRecording() {
         guard !isRecording && !isProcessing else { return }
 
-        // Verify model is downloaded
-        guard downloader.isModelDownloaded else {
-            showNotification(title: "Model Required", text: "Please download the Whisper model in Settings first.")
-            return
-        }
-
         guard hasMicrophonePermission() else { return }
+
+        let provider = audioInputState.transcriptionProvider
+        if provider == .local {
+            guard downloader.isModelDownloaded else {
+                showNotification(title: "Model Required", text: "Please download the Whisper model in Settings first.")
+                return
+            }
+        } else {
+            do {
+                recordingAPIKey = try APIKeyStore.read()
+                guard !recordingAPIKey.isEmpty else {
+                    throw TranscriptionError.message("Сохраните API-ключ OpenRouter в настройках.")
+                }
+                if audioInputState.outputLanguage == .english && audioInputState.translationModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    throw TranscriptionError.message("Укажите модель перевода ENG в настройках.")
+                }
+            } catch {
+                recordingAPIKey = ""
+                showNotification(title: "OpenRouter", text: error.localizedDescription)
+                return
+            }
+        }
+        recordingProvider = provider
+        recordingModel = audioInputState.openRouterModel
+        recordingTranslationModel = audioInputState.translationModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        recordingOutputLanguage = audioInputState.outputLanguage
 
         let recordingRequestedAt = Date()
 
@@ -240,6 +267,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
             print("[Izi Input] Failed to start recording: \(error.localizedDescription)")
             isRecording = false
             audioRecorder = nil
+            recordingAPIKey = ""
             audioInputState.isRecording = false
             audioInputState.isAudioReady = false
             audioInputState.amplitude = 0.0
@@ -297,9 +325,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
             updateStatusIcon()
             print("[Izi Input] Recording stopped. Starting transcription...")
 
-            // Process on background thread to keep UI interactive
-            DispatchQueue.global(qos: .userInitiated).async {
-                self.runWhisperTranslation()
+            if recordingProvider == .openRouter {
+                runOpenRouterTranscription()
+            } else {
+                // Process on background thread to keep UI interactive
+                DispatchQueue.global(qos: .userInitiated).async {
+                    self.runWhisperTranslation()
+                }
             }
         } else {
             print("[Izi Input] Recording cancelled or too short; skipping transcription.")
@@ -375,6 +407,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
 
     func finishRecordingWithoutTranscription(title: String, text: String) {
         isProcessing = false
+        recordingAPIKey = ""
         audioInputState.lastRussianText = ""
         audioInputState.lastEnglishText = ""
         audioInputState.hasLastAudio = FileManager.default.fileExists(atPath: tempAudioURL.path)
@@ -451,6 +484,42 @@ class AppDelegate: NSObject, NSApplicationDelegate, AVAudioPlayerDelegate {
     func dbFS(_ value: Double) -> Double {
         guard value > 0 else { return -160.0 }
         return 20.0 * log10(value)
+    }
+
+    // MARK: - OpenRouter Integration
+
+    func runOpenRouterTranscription() {
+        let model = recordingModel
+        let translationModel = recordingTranslationModel
+        let language = recordingOutputLanguage
+        let apiKey = recordingAPIKey
+        recordingAPIKey = ""
+        let audioURL = tempAudioURL
+        audioInputState.lastRussianText = ""
+        audioInputState.lastEnglishText = ""
+        audioInputState.hasLastAudio = true
+
+        Task { @MainActor in
+            defer {
+                self.isProcessing = false
+                self.updateStatusIcon()
+            }
+            do {
+                let client = OpenRouterTranscription()
+                let audio = try Data(contentsOf: audioURL)
+                let transcript = try await client.transcribe(audio: audio, model: model, apiKey: apiKey)
+                self.audioInputState.lastRussianText = transcript
+                if language == .english {
+                    let translation = try await client.translate(text: transcript, model: translationModel, apiKey: apiKey)
+                    self.audioInputState.lastEnglishText = translation
+                    self.pasteText(translation)
+                } else {
+                    self.pasteText(transcript)
+                }
+            } catch {
+                self.showNotification(title: "OpenRouter", text: error.localizedDescription)
+            }
+        }
     }
 
     // MARK: - Whisper Integration
